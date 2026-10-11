@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agnes Storyboard — vidéos 1 min</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2430; --ink:#e6edf3; --muted:#8b949e;
+    --line:#30363d; --accent:#58c9a8; --accent-dk:#2f9e7e; --amber:#e3b341; --danger:#ff6b81;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,sans-serif;
+         min-height:100vh; padding:20px 16px 70px; }
+  .wrap { max-width:560px; margin:0 auto; }
+  h1 { font-size:22px; margin-bottom:4px; }
+  h1 b { color:var(--accent); }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:14px; margin-bottom:12px; color:var(--accent); }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 5px; }
+  input[type=text], textarea, select { width:100%; padding:10px 12px; background:var(--panel2); color:var(--ink);
+    border:1px solid var(--line); border-radius:6px; font-size:14px; outline:none; font-family:inherit; }
+  input:focus, textarea:focus, select:focus { border-color:var(--accent); }
+  textarea { min-height:58px; resize:vertical; }
+  .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .thumb { width:64px; height:86px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
+  .upload { display:block; border:2px dashed var(--line); border-radius:10px; padding:20px; text-align:center;
+    cursor:pointer; color:var(--muted); font-size:14px; transition:border-color .2s; }
+  .upload:hover { border-color:var(--accent); }
+  .upload input { display:none; }
+  .btn { display:block; width:100%; padding:14px; background:var(--accent); color:#04231a; border:none;
+    border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; margin-top:12px; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn.ghost { background:var(--panel2); color:var(--ink); border:1px solid var(--line); font-weight:500; }
+  .btn.download { text-align:center; text-decoration:none; }
+  .row { display:flex; gap:12px; }
+  .row > div { flex:1; }
+  .toggle { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; color:var(--ink); cursor:pointer; }
+  .toggle input { width:18px; height:18px; accent-color:var(--accent); }
+  .prompt-block { margin-top:12px; }
+  .prompt-block label { margin:8px 0 4px; }
+  .progress { margin-top:16px; }
+  .bar { height:12px; background:var(--panel2); border-radius:6px; overflow:hidden; margin:8px 0; }
+  .bar i { display:block; height:100%; width:0%; background:var(--accent); transition:width .4s; }
+  .stage { font-size:13px; color:var(--muted); }
+  .error { color:var(--danger); font-size:13px; margin-top:10px; }
+  video { width:100%; border-radius:10px; margin-top:12px; background:#000; }
+  .gear { position:fixed; top:14px; right:16px; background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; align-items:center; justify-content:center; z-index:50; }
+  .modal.open { display:flex; }
+  .modal-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px; width:90%; max-width:400px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+  <button class="gear" id="gear">⚙️</button>
+  <div class="wrap">
+    <h1>🎬 <b>Agnes</b> Storyboard</h1>
+    <div class="sub">1 à 5 images → scénario auto (modifiable) → vidéo de 1 min, montée, voix française + musique + sous-titres.</div>
+
+    <div class="card">
+      <h2>1. Images (1 à 5)</h2>
+      <label class="upload" id="uploadZone">
+        Clique pour ajouter des images
+        <input type="file" id="fileInput" accept="image/*" multiple>
+      </label>
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. Thème → scénario</h2>
+      <label>Décris l'histoire</label>
+      <textarea id="theme" placeholder="Ex : un homme découvre Paris pour la première fois, puis s'envole dans une voiture volante…"></textarea>
+      <button class="btn ghost" id="scenarioBtn">✨ Générer le scénario (5 plans)</button>
+      <div id="prompts" class="hidden"></div>
+    </div>
+
+    <div class="card">
+      <h2>3. Réglages</h2>
+      <div class="row">
+        <div>
+          <label>Format (ratio)</label>
+          <select id="ratio">
+            <option value="9:16">Vertical 9:16 (TikTok/Reels)</option>
+            <option value="16:9">Horizontal 16:9 (YouTube)</option>
+            <option value="1:1">Carré 1:1</option>
+          </select>
+        </div>
+        <div>
+          <label>Voix française</label>
+          <input type="text" id="voice" placeholder="Narration lue sur la vidéo…">
+        </div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="music" checked> 🎵 Musique de fond</label>
+      <label class="toggle"><input type="checkbox" id="subs" checked> 💬 Sous-titres incrustés</label>
+    </div>
+
+    <div class="card">
+      <h2>4. Générer</h2>
+      <button class="btn" id="generate">🎬 Générer la vidéo (≈10-15 min)</button>
+      <div class="progress hidden" id="progress">
+        <div class="stage" id="stage">…</div>
+        <div class="bar"><i id="barFill"></i></div>
+      </div>
+      <div class="error" id="error"></div>
+      <div id="result" class="hidden">
+        <video id="player" controls playsinline></video>
+        <a class="btn download" id="download" download="video-1min.mp4">⬇️ Télécharger la vidéo</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="modal">
+    <div class="modal-card">
+      <h2 style="color:var(--accent);font-size:15px;margin-bottom:14px;">⚙️ Configuration</h2>
+      <label>Serveur (URL du backend)</label>
+      <input type="text" id="serverUrl" placeholder="vide = même origine">
+      <label>Clé d'accès</label>
+      <input type="password" id="token">
+      <button class="btn" id="saveCfg" style="margin-top:16px;">Enregistrer</button>
+    </div>
+  </div>
+
+<script>
+const LS = 'agnes_storyboard_cfg';
+let images = [];
+let prompts = [];
+
+function cfg() { try { return JSON.parse(localStorage.getItem(LS)||'{}'); } catch(e){ return {}; } }
+function saveCfg(c) { localStorage.setItem(LS, JSON.stringify(c)); }
+function api() { return (cfg().server || '').replace(/\/$/,'') || ''; }
+function token() { return cfg().token || ''; }
+const headers = () => ({'Content-Type':'application/json','X-Auth-Token':token()});
+
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change', async () => {
+  images = [];
+  for (const f of Array.from(fileInput.files).slice(0,5)) images.push(await toBase64(f));
+  renderThumbs();
+});
+function toBase64(file) { return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+function renderThumbs() {
+  const t = document.getElementById('thumbs'); t.innerHTML='';
+  images.forEach(b=>{ const i=document.createElement('img'); i.className='thumb'; i.src='data:image/jpeg;base64,'+b; t.appendChild(i); });
+}
+
+async function genScenario() {
+  const theme = document.getElementById('theme').value.trim();
+  const err = document.getElementById('error'); err.textContent='';
+  if (!theme) { err.textContent='Décris un thème d\'abord.'; return; }
+  if (!token()) { openModal(); err.textContent='Configure ta clé d\'accès (⚙️).'; return; }
+  const btn = document.getElementById('scenarioBtn'); btn.disabled=true; btn.textContent='Génération du scénario…';
+  try {
+    const r = await fetch(api()+'/api/scenario', {method:'POST', headers:headers(), body:JSON.stringify({theme})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    prompts = d.prompts || [];
+    renderPrompts();
+  } catch(e) { err.textContent='Erreur : '+e.message; }
+  finally { btn.disabled=false; btn.textContent='✨ Générer le scénario (5 plans)'; }
+}
+
+function renderPrompts() {
+  const box = document.getElementById('prompts');
+  box.innerHTML = '<label style="margin-top:14px;">Scénario (modifiable) :</label>';
+  prompts.forEach((p,i)=>{
+    const l = document.createElement('label'); l.textContent='Plan '+(i+1);
+    const t = document.createElement('textarea'); t.value=p;
+    t.addEventListener('input', ()=> prompts[i]=t.value);
+    box.appendChild(l); box.appendChild(t);
+  });
+  box.classList.remove('hidden');
+}
+
+async function generate() {
+  const err = document.getElementById('error'); err.textContent='';
+  if (!images.length) { err.textContent='Ajoute au moins une image.'; return; }
+  if (!prompts.length) { err.textContent='Génère d\'abord le scénario (étape 2).'; return; }
+  if (!token()) { openModal(); err.textContent='Configure ta clé d\'accès (⚙️).'; return; }
+  document.getElementById('result').classList.add('hidden');
+  document.getElementById('progress').classList.remove('hidden');
+  const btn = document.getElementById('generate'); btn.disabled=true;
+  try {
+    const r = await fetch(api()+'/api/generate', {method:'POST', headers:headers(), body:JSON.stringify({
+      images, prompts, aspect_ratio: document.getElementById('ratio').value,
+      voice_text: document.getElementById('voice').value.trim(),
+      music: document.getElementById('music').checked,
+      subtitles: document.getElementById('subs').checked,
+    })});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    await poll(d.job_id);
+  } catch(e) { err.textContent='Erreur : '+e.message; }
+  finally { btn.disabled=false; }
+}
+
+async function poll(jobId) {
+  const stage = document.getElementById('stage'); const fill = document.getElementById('barFill');
+  const labels = { queued:'En attente…', generating:'Génération des 5 plans…', montage:'Montage…', voice:'Voix + musique…', subtitles:'Sous-titres…', done:'Terminé ✅', error:'Erreur' };
+  while (true) {
+    await new Promise(r=>setTimeout(r,5000));
+    const r = await fetch(api()+'/api/status?job_id='+jobId);
+    const j = await r.json();
+    stage.textContent = (labels[j.status]||j.status)+' — '+(j.progress||0)+'%';
+    fill.style.width = (j.progress||0)+'%';
+    if (j.status==='done') { await loadVideo(jobId); return; }
+    if (j.status==='error') { document.getElementById('error').textContent='Erreur : '+(j.error||'inconnue'); return; }
+  }
+}
+
+async function loadVideo(jobId) {
+  const r = await fetch(api()+'/api/video?job_id='+jobId, {headers:{'X-Auth-Token':token()}});
+  if (!r.ok) { document.getElementById('error').textContent='Impossible de charger la vidéo.'; return; }
+  const url = URL.createObjectURL(await r.blob());
+  document.getElementById('player').src = url;
+  document.getElementById('download').href = url;
+  document.getElementById('result').classList.remove('hidden');
+  document.getElementById('progress').classList.add('hidden');
+}
+
+document.getElementById('scenarioBtn').onclick = genScenario;
+document.getElementById('generate').onclick = generate;
+
+const modal = document.getElementById('modal');
+document.getElementById('gear').onclick = openModal;
+document.getElementById('saveCfg').onclick = () => {
+  saveCfg({ server: document.getElementById('serverUrl').value.trim(), token: document.getElementById('token').value.trim() });
+  modal.classList.remove('open');
+};
+function openModal() {
+  const c = cfg();
+  document.getElementById('serverUrl').value = c.server || '';
+  document.getElementById('token').value = c.token || '';
+  modal.classList.add('open');
+}
+</script>
+</body>
+</html>
