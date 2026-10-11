@@ -44,6 +44,9 @@
   .bar { height:12px; background:var(--panel2); border-radius:6px; overflow:hidden; margin:8px 0; }
   .bar i { display:block; height:100%; width:0%; background:var(--accent); transition:width .4s; }
   .stage { font-size:13px; color:var(--muted); }
+  .console { margin-top:10px; background:#0a0f14; border:1px solid var(--line); border-radius:6px; padding:8px;
+    font-family:ui-monospace,monospace; font-size:11px; line-height:1.5; max-height:200px; overflow-y:auto;
+    color:var(--muted); white-space:pre-wrap; }
   .error { color:var(--danger); font-size:13px; margin-top:10px; }
   video { width:100%; border-radius:10px; margin-top:12px; background:#000; }
   .gear { position:fixed; top:14px; right:16px; background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
@@ -102,6 +105,7 @@
       <div class="progress hidden" id="progress">
         <div class="stage" id="stage">…</div>
         <div class="bar"><i id="barFill"></i></div>
+        <div class="console" id="console"></div>
       </div>
       <div class="error" id="error"></div>
       <div id="result" class="hidden">
@@ -139,10 +143,26 @@ fileInput.addEventListener('change', async () => {
   for (const f of Array.from(fileInput.files).slice(0,5)) images.push(await toBase64(f));
   renderThumbs();
 });
-function toBase64(file) { return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+function toBase64(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 1280;
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w*s); h = Math.round(h*s); }
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', 0.9));
+    };
+    img.onerror = rej;
+    img.src = url;
+  });
+}
 function renderThumbs() {
   const t = document.getElementById('thumbs'); t.innerHTML='';
-  images.forEach(b=>{ const i=document.createElement('img'); i.className='thumb'; i.src='data:image/jpeg;base64,'+b; t.appendChild(i); });
+  images.forEach(b=>{ const i=document.createElement('img'); i.className='thumb'; i.src=b; t.appendChild(i); });
 }
 
 async function genScenario() {
@@ -204,6 +224,11 @@ async function poll(jobId) {
     const j = await r.json();
     stage.textContent = (labels[j.status]||j.status)+' — '+(j.progress||0)+'%';
     fill.style.width = (j.progress||0)+'%';
+    if (j.log) {
+      const c = document.getElementById('console');
+      c.textContent = j.log.map(l => l.m).join('\n');
+      c.scrollTop = c.scrollHeight;
+    }
     if (j.status==='done') { await loadVideo(jobId); return; }
     if (j.status==='error') { document.getElementById('error').textContent='Erreur : '+(j.error||'inconnue'); return; }
   }

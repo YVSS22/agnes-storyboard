@@ -73,6 +73,12 @@ def get_job(job_id):
     with JOBS_LOCK:
         return dict(JOBS.get(job_id, {}))
 
+def log(job_id, msg):
+    with JOBS_LOCK:
+        entry = JOBS.setdefault(job_id, {})
+        entry.setdefault("log", []).append({"t": time.time(), "m": msg})
+        entry["log"] = entry["log"][-200:]
+
 # ---- helpers ---------------------------------------------------------------
 def http_json(url, payload=None, headers=None, method="POST"):
     h = {"Content-Type": "application/json"}
@@ -104,25 +110,37 @@ def agnes_create(prompt, data_uris, aspect_ratio):
         "images": data_uris, "seconds": "12", "size": "720P",
         "aspect_ratio": aspect_ratio, "n": 1,
     }
-    d = http_json(AGNES_API + "/v1/videos", payload,
-                  headers={"Authorization": f"Bearer {AGNES_KEY}"})
-    return d.get("video_id") or d.get("id")
+    try:
+        d = http_json(AGNES_API + "/v1/videos", payload,
+                      headers={"Authorization": f"Bearer {AGNES_KEY}"})
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Agnes HTTP {e.code}: {e.read().decode()[:300]}")
+    vid = d.get("video_id") or d.get("id")
+    if not vid:
+        raise RuntimeError(f"Agnes no video_id: {json.dumps(d)[:300]}")
+    return vid
 
 def agnes_download(video_id, dest):
     for _ in range(50):
-        d = http_json(f"{AGNES_API}/agnesapi?video_id={video_id}&model_name={AGNES_MODEL}",
-                      headers={"Authorization": f"Bearer {AGNES_KEY}"}, method="GET")
+        try:
+            d = http_json(f"{AGNES_API}/agnesapi?video_id={video_id}&model_name={AGNES_MODEL}",
+                          headers={"Authorization": f"Bearer {AGNES_KEY}"}, method="GET")
+        except Exception:
+            time.sleep(8)
+            continue
         st = str(d.get("status", "")).lower()
         if st in {"completed", "succeeded", "success", "done"}:
             md = d.get("metadata") or {}
             url = d.get("url") or md.get("url")
+            if not url:
+                raise RuntimeError(f"Agnes done but no url: {json.dumps(d)[:300]}")
             with urllib.request.urlopen(urllib.request.Request(url), timeout=180) as r:
                 dest.write_bytes(r.read())
             return True
         if st in {"failed", "error", "cancelled"}:
-            return False
+            raise RuntimeError(f"Agnes status={st}: {json.dumps(d, ensure_ascii=False)[:400]}")
         time.sleep(12)
-    return False
+    raise RuntimeError("Agnes poll timed out")
 
 def tts_voice(text, dest):
     import asyncio
@@ -181,43 +199,51 @@ def run_job(job_id, images, prompts, aspect_ratio, voice_text, with_music, with_
     jobdir = WORK / job_id
     jobdir.mkdir(exist_ok=True)
     try:
-        data_uris = [f"data:image/jpeg;base64,{b64}" for b64 in images]
         set_job(job_id, status="generating", progress=10)
+        log(job_id, f"Ratio {aspect_ratio}, {len(images)} image(s), {len(prompts)} plan(s)")
         takes = []
         for i, p in enumerate(prompts):
-            vid = agnes_create(p, data_uris, aspect_ratio)
-            if not vid:
-                raise RuntimeError(f"Agnes refused shot {i+1}")
+            log(job_id, f"Plan {i+1}/{len(prompts)} : envoi à Agnes…")
+            vid = agnes_create(p, images, aspect_ratio)
+            log(job_id, f"Plan {i+1} : tâche {vid} créée, génération…")
             dest = jobdir / f"take{i+1}.mp4"
-            if not agnes_download(vid, dest):
-                raise RuntimeError(f"shot {i+1} failed")
+            agnes_download(vid, dest)
             takes.append(dest)
+            log(job_id, f"Plan {i+1} : rendu ✓")
             set_job(job_id, progress=10 + int(70 * (i + 1) / len(prompts)))
 
         set_job(job_id, status="montage", progress=85)
+        log(job_id, "Montage (concaténation des 5 plans)…")
         raw = jobdir / "raw.mp4"
         concat_takes(takes, raw)
         duration = _dur(raw)
+        log(job_id, f"Montage ✓ ({duration:.0f}s)")
 
         current = raw
         if voice_text and voice_text.strip():
             set_job(job_id, status="voice", progress=90)
+            log(job_id, "Génération de la voix française…")
             voice = jobdir / "voice.mp3"
             tts_voice(voice_text.strip(), voice)
             with_audio = jobdir / "with_audio.mp4"
             build_audio(raw, voice, with_audio, with_music, duration)
             current = with_audio
+            log(job_id, f"Audio ✓ (voix{' + musique' if with_music else ''})")
 
         if with_subs and voice_text and voice_text.strip():
             set_job(job_id, status="subtitles", progress=95)
+            log(job_id, "Incrustation des sous-titres…")
             srt = jobdir / "subs.srt"
             srt.write_text(make_srt(voice_text.strip(), duration))
             final = jobdir / "final.mp4"
             burn_subtitles(current, srt, final)
             current = final
+            log(job_id, "Sous-titres ✓")
 
         set_job(job_id, status="done", progress=100, video=str(current))
+        log(job_id, "✅ Vidéo terminée")
     except Exception as e:
+        log(job_id, f"❌ ERREUR : {e}")
         set_job(job_id, status="error", error=str(e))
 
 # ---- HTTP handler ----------------------------------------------------------
