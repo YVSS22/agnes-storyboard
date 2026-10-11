@@ -134,27 +134,41 @@ def agnes_create(prompt, data_uris, aspect_ratio, seconds):
         raise RuntimeError(f"Agnes no video_id: {json.dumps(d)[:300]}")
     return vid
 
-def agnes_download(video_id, dest):
-    for _ in range(60):
+def agnes_download(video_id, dest, job_id=None, label=""):
+    last_st = "?"
+    last_progress = -1
+    last_log = 0.0
+    for _ in range(150):  # up to ~25 min
         try:
             d = http_json(f"{AGNES_API}/agnesapi?video_id={video_id}&model_name={AGNES_MODEL}",
                           headers={"Authorization": f"Bearer {AGNES_KEY}"}, method="GET")
-        except Exception:
+        except Exception as e:
+            if time.time() - last_log > 60:
+                if job_id:
+                    log(job_id, f"{label} connexion Agnes instable ({e})…")
+                last_log = time.time()
             time.sleep(8)
             continue
         st = str(d.get("status", "")).lower()
+        last_st = st
+        err = d.get("error")
+        prog = d.get("progress")
+        if job_id and prog is not None and (prog - last_progress >= 15 or time.time() - last_log > 30):
+            log(job_id, f"{label} génération {prog}% (status={st})")
+            last_progress = prog
+            last_log = time.time()
         if st in {"completed", "succeeded", "success", "done"}:
             md = d.get("metadata") or {}
             url = d.get("url") or md.get("url")
             if not url:
                 raise RuntimeError(f"Agnes done but no url: {json.dumps(d)[:300]}")
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=180) as r:
+            with urllib.request.urlopen(urllib.request.Request(url), timeout=300) as r:
                 dest.write_bytes(r.read())
             return True
-        if st in {"failed", "error", "cancelled"}:
-            raise RuntimeError(f"Agnes status={st}: {json.dumps(d, ensure_ascii=False)[:400]}")
-        time.sleep(12)
-    raise RuntimeError("Agnes poll timed out")
+        if st in {"failed", "error", "cancelled", "canceled", "expired", "rejected", "timeout"} or err:
+            raise RuntimeError(f"Agnes échec (status={st}, error={err}): {json.dumps(d, ensure_ascii=False)[:400]}")
+        time.sleep(10)
+    raise RuntimeError(f"Agnes poll timed out (dernier status={last_st}, progress={last_progress})")
 
 def tts_voice(text, dest, voice):
     import asyncio
@@ -211,10 +225,10 @@ def make_gif(video, out):
                     "-loop", "0", str(out)], check=True)
 
 # ---- pipeline --------------------------------------------------------------
-def render_take(prompt, image_uri, aspect_ratio, seconds, dest):
+def render_take(prompt, image_uri, aspect_ratio, seconds, dest, job_id=None, label=""):
     data_uris = [image_uri] if image_uri else []
     vid = agnes_create(prompt, data_uris, aspect_ratio, seconds)
-    agnes_download(vid, dest)
+    agnes_download(vid, dest, job_id, label)
 
 def post_process(job_id, takes, settings):
     """Montage + voice + music + subtitles + GIF. Returns final mp4 path."""
@@ -275,7 +289,7 @@ def run_generation(job_id, settings):
             img = images[i % len(images)] if images else None
             log(job_id, f"Plan {i+1}/{n_shots} : envoi à Agnes…")
             dest = jobdir / f"take{i+1}.mp4"
-            render_take(p, img, settings["aspect_ratio"], seconds, dest)
+            render_take(p, img, settings["aspect_ratio"], seconds, dest, job_id, f"Plan {i+1}")
             takes.append(dest)
             log(job_id, f"Plan {i+1} : rendu ✓")
             set_job(job_id, progress=5 + int(70 * (i + 1) / n_shots))
@@ -310,7 +324,7 @@ def run_regenerate(job_id, plan_index):
         img = images[i % len(images)] if images else None
         log(job_id, f"↻ Régénération du plan {i+1}/{len(prompts)}…")
         dest = takes[i]
-        render_take(prompts[i], img, job.get("aspect_ratio", "9:16"), job.get("seconds", "12"), dest)
+        render_take(prompts[i], img, job.get("aspect_ratio", "9:16"), job.get("seconds", "12"), dest, job_id, f"Plan {i+1}")
         log(job_id, f"Plan {i+1} : nouveau rendu ✓")
         settings = {
             "voice_text": job.get("voice_text"), "voice": job.get("voice", "homme"),
