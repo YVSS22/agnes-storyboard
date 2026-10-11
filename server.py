@@ -118,56 +118,115 @@ def deepseek_scenario(theme, n_shots):
         prompts.append(theme)
     return title, prompts[:n_shots]
 
-def agnes_create(prompt, data_uris, aspect_ratio, seconds):
-    payload = {
-        "model": AGNES_MODEL, "prompt": prompt, "mode": "reference",
-        "images": data_uris, "seconds": seconds, "size": "720P",
-        "aspect_ratio": aspect_ratio, "n": 1,
-    }
+def decode_composite_id(v):
+    """La nouvelle API 2.5 peut renvoyer un ID composite `video_<base64>` qui
+    encode le vrai video_id (`video_id:task_...`). On le décode si besoin."""
+    if not isinstance(v, str) or not v.startswith("video_"):
+        return None
+    b64 = v[6:]
+    b64 += "=" * (-len(b64) % 4)
     try:
-        d = http_json(AGNES_API + "/v1/videos", payload,
-                      headers={"Authorization": f"Bearer {AGNES_KEY}"})
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Agnes HTTP {e.code}: {e.read().decode()[:300]}")
-    vid = d.get("video_id") or d.get("id")
-    if not vid:
-        raise RuntimeError(f"Agnes no video_id: {json.dumps(d)[:300]}")
-    return vid
+        dec = base64.b64decode(b64).decode()
+        m = re.search(r"video_id:([^;]+)", dec)
+        if m:
+            return m.group(1).strip()
+    except Exception:
+        pass
+    return None
 
-def agnes_download(video_id, dest, job_id=None, label=""):
+def agnes_create(prompt, image_uri, aspect_ratio, seconds, job_id=None):
+    # ⚠️ Format 2.5 (nouveau) : mode 'text' ou 'keyframe', champ `first_frame`
+    # (PAS 'reference' + 'images', ni num_frames/frame_rate)
+    payload = {
+        "model": AGNES_MODEL, "prompt": prompt, "seconds": seconds,
+        "size": "720P", "aspect_ratio": aspect_ratio, "mode": "text",
+    }
+    if image_uri:
+        payload["mode"] = "keyframe"
+        payload["first_frame"] = image_uri
+    d = None
+    last_err = None
+    for attempt in range(6):
+        try:
+            d = http_json(AGNES_API + "/v1/videos", payload,
+                          headers={"Authorization": f"Bearer {AGNES_KEY}"})
+            break
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:300]
+            # 503 video_queue_full / 429 rate limit / 5xx → retry avec backoff
+            if e.code in (429, 500, 502, 503, 504, 520, 522, 524):
+                last_err = f"HTTP {e.code}: {body}"
+                wait = 20 + attempt * 20
+                if job_id:
+                    log(job_id, f"Agnes saturé ({e.code}) — nouvelle tentative dans {wait}s…")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Agnes HTTP {e.code}: {body}")
+    if d is None:
+        raise RuntimeError(f"Agnes indisponible ({last_err})")
+    raw = d.get("video_id") or d.get("id") or d.get("task_id")
+    if not raw:
+        raise RuntimeError(f"Agnes no video_id: {json.dumps(d)[:300]}")
+    ids = [raw]
+    inner = decode_composite_id(raw)
+    if inner and inner != raw:
+        ids.append(inner)
+    return ids
+
+# Endpoints de polling — on essaie plusieurs en fallback (le model_name est
+# obligatoire pour les modes keyframe/reference sur l'endpoint agnesapi)
+POLL_BUILDERS = [
+    lambda vid: f"{AGNES_API}/agnesapi?video_id={vid}&model_name={AGNES_MODEL}",
+    lambda vid: f"{AGNES_API}/v1/videos/{vid}",
+    lambda vid: f"{AGNES_API}/v1/videos/{vid}/status",
+    lambda vid: f"{AGNES_API}/v1/videos/{vid}?model_name={AGNES_MODEL}",
+]
+
+def agnes_download(ids, dest, job_id=None, label=""):
     last_st = "?"
     last_progress = -1
-    last_log = 0.0
-    for _ in range(150):  # up to ~25 min
-        try:
-            d = http_json(f"{AGNES_API}/agnesapi?video_id={video_id}&model_name={AGNES_MODEL}",
-                          headers={"Authorization": f"Bearer {AGNES_KEY}"}, method="GET")
-        except Exception as e:
-            if time.time() - last_log > 60:
-                if job_id:
-                    log(job_id, f"{label} connexion Agnes instable ({e})…")
-                last_log = time.time()
-            time.sleep(8)
-            continue
-        st = str(d.get("status", "")).lower()
-        last_st = st
-        err = d.get("error")
-        prog = d.get("progress")
-        if job_id and prog is not None and (prog - last_progress >= 15 or time.time() - last_log > 30):
-            log(job_id, f"{label} génération {prog}% (status={st})")
-            last_progress = prog
-            last_log = time.time()
-        if st in {"completed", "succeeded", "success", "done"}:
-            md = d.get("metadata") or {}
-            url = d.get("url") or md.get("url")
-            if not url:
-                raise RuntimeError(f"Agnes done but no url: {json.dumps(d)[:300]}")
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=300) as r:
-                dest.write_bytes(r.read())
-            return True
-        if st in {"failed", "error", "cancelled", "canceled", "expired", "rejected", "timeout"} or err:
-            raise RuntimeError(f"Agnes échec (status={st}, error={err}): {json.dumps(d, ensure_ascii=False)[:400]}")
+    last_log = time.time()
+    # 1er poll après ~60s : Agnes démarre la tâche
+    for _ in range(6):
         time.sleep(10)
+    for _ in range(100):  # ~25 min max
+        got = False
+        for vid in ids:
+            for build in POLL_BUILDERS:
+                url = build(vid)
+                try:
+                    d = http_json(url, headers={"Authorization": f"Bearer {AGNES_KEY}"}, method="GET")
+                except urllib.error.HTTPError as e:
+                    if e.code != 404 and time.time() - last_log > 60 and job_id:
+                        log(job_id, f"{label} HTTP {e.code} sur le polling…")
+                        last_log = time.time()
+                    continue
+                except Exception:
+                    continue
+                st = str(d.get("status", "")).lower()
+                last_st = st
+                err = d.get("error")
+                prog = d.get("progress")
+                if job_id and prog is not None and (prog - last_progress >= 15 or time.time() - last_log > 30):
+                    log(job_id, f"{label} génération {prog}% (status={st})")
+                    last_progress = prog
+                    last_log = time.time()
+                if st in {"completed", "succeeded", "success", "done"}:
+                    md = d.get("metadata") or {}
+                    od = d.get("output") or {}
+                    url = d.get("url") or md.get("url") or od.get("url")
+                    if not url:
+                        raise RuntimeError(f"Agnes done but no url: {json.dumps(d)[:300]}")
+                    with urllib.request.urlopen(urllib.request.Request(url), timeout=300) as r:
+                        dest.write_bytes(r.read())
+                    return True
+                if st in {"failed", "error", "cancelled", "canceled", "expired", "rejected", "timeout"} or err:
+                    raise RuntimeError(f"Agnes échec (status={st}, error={err}): {json.dumps(d, ensure_ascii=False)[:400]}")
+                got = True
+                break
+            if got:
+                break
+        time.sleep(12)
     raise RuntimeError(f"Agnes poll timed out (dernier status={last_st}, progress={last_progress})")
 
 def tts_voice(text, dest, voice):
@@ -226,9 +285,8 @@ def make_gif(video, out):
 
 # ---- pipeline --------------------------------------------------------------
 def render_take(prompt, image_uri, aspect_ratio, seconds, dest, job_id=None, label=""):
-    data_uris = [image_uri] if image_uri else []
-    vid = agnes_create(prompt, data_uris, aspect_ratio, seconds)
-    agnes_download(vid, dest, job_id, label)
+    ids = agnes_create(prompt, image_uri, aspect_ratio, seconds, job_id)
+    agnes_download(ids, dest, job_id, label)
 
 def post_process(job_id, takes, settings):
     """Montage + voice + music + subtitles + GIF. Returns final mp4 path."""
