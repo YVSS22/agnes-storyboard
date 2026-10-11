@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agnes Storyboard — vidéos 1 min</title>
+<title>Agnes Storyboard — vidéos IA</title>
 <style>
   :root {
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2430; --ink:#e6edf3; --muted:#8b949e;
@@ -30,16 +30,15 @@
   .upload:hover { border-color:var(--accent); }
   .upload input { display:none; }
   .btn { display:block; width:100%; padding:14px; background:var(--accent); color:#04231a; border:none;
-    border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; margin-top:12px; }
+    border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; margin-top:12px; text-align:center; text-decoration:none; }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
   .btn.ghost { background:var(--panel2); color:var(--ink); border:1px solid var(--line); font-weight:500; }
-  .btn.download { text-align:center; text-decoration:none; }
   .row { display:flex; gap:12px; }
   .row > div { flex:1; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
   .toggle { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; color:var(--ink); cursor:pointer; }
   .toggle input { width:18px; height:18px; accent-color:var(--accent); }
-  .prompt-block { margin-top:12px; }
-  .prompt-block label { margin:8px 0 4px; }
+  .prompt-block textarea { margin-bottom:8px; }
   .progress { margin-top:16px; }
   .bar { height:12px; background:var(--panel2); border-radius:6px; overflow:hidden; margin:8px 0; }
   .bar i { display:block; height:100%; width:0%; background:var(--accent); transition:width .4s; }
@@ -49,6 +48,23 @@
     color:var(--muted); white-space:pre-wrap; }
   .error { color:var(--danger); font-size:13px; margin-top:10px; }
   video { width:100%; border-radius:10px; margin-top:12px; background:#000; }
+  .share { display:flex; gap:8px; margin-top:10px; }
+  .share input { flex:1; font-size:12px; padding:8px; }
+  .share button { padding:0 14px; background:var(--panel2); color:var(--ink); border:1px solid var(--line); border-radius:6px; cursor:pointer; white-space:nowrap; }
+  .dl-row { display:flex; gap:8px; margin-top:12px; }
+  .dl-row a { flex:1; }
+  .dl-row a.alt { background:var(--panel2); color:var(--ink); border:1px solid var(--line); font-weight:500; }
+  .regens { margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; }
+  .regens button { padding:8px 12px; background:var(--panel2); color:var(--muted); border:1px solid var(--line); border-radius:6px; font-size:12px; cursor:pointer; }
+  .regens button:hover { border-color:var(--accent); color:var(--ink); }
+  .gitem { display:flex; gap:12px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  .gitem:last-child { border-bottom:none; }
+  .gitem video { width:70px; height:94px; object-fit:cover; border-radius:6px; margin:0; background:#000; }
+  .gitem .info { flex:1; min-width:0; }
+  .gitem .t { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gitem .d { font-size:11px; color:var(--muted); margin-top:2px; }
+  .gitem .acts { display:flex; flex-direction:column; gap:4px; }
+  .gitem .acts a { font-size:11px; color:var(--accent); text-decoration:none; }
   .gear { position:fixed; top:14px; right:16px; background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; }
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; align-items:center; justify-content:center; z-index:50; }
   .modal.open { display:flex; }
@@ -60,7 +76,7 @@
   <button class="gear" id="gear">⚙️</button>
   <div class="wrap">
     <h1>🎬 <b>Agnes</b> Storyboard</h1>
-    <div class="sub">1 à 5 images → scénario auto (modifiable) → vidéo de 1 min, montée, voix française + musique + sous-titres.</div>
+    <div class="sub">1 à 5 images → scénario auto → vidéo IA montée, voix française, musique, sous-titres. Durée, voix et musique au choix.</div>
 
     <div class="card">
       <h2>1. Images (1 à 5)</h2>
@@ -69,39 +85,63 @@
         <input type="file" id="fileInput" accept="image/*" multiple>
       </label>
       <div class="thumbs" id="thumbs"></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;">💡 Chaque image correspond à un plan (dans l'ordre). S'il y a moins d'images que de plans, elles sont réutilisées.</div>
     </div>
 
     <div class="card">
       <h2>2. Thème → scénario</h2>
       <label>Décris l'histoire</label>
-      <textarea id="theme" placeholder="Ex : un homme découvre Paris pour la première fois, puis s'envole dans une voiture volante…"></textarea>
-      <button class="btn ghost" id="scenarioBtn">✨ Générer le scénario (5 plans)</button>
-      <div id="prompts" class="hidden"></div>
+      <textarea id="theme" placeholder="Ex : un chat qui découvre la neige pour la première fois…"></textarea>
+      <button class="btn ghost" id="scenarioBtn">✨ Générer le scénario</button>
+      <label>Titre</label>
+      <input type="text" id="title" placeholder="Titre auto (modifiable)">
+      <div id="prompts" class="hidden prompt-block"></div>
     </div>
 
     <div class="card">
       <h2>3. Réglages</h2>
-      <div class="row">
+      <div class="grid">
+        <div>
+          <label>Durée</label>
+          <select id="duration">
+            <option value="30">30 secondes</option>
+            <option value="60" selected>1 minute</option>
+            <option value="120">2 minutes</option>
+          </select>
+        </div>
         <div>
           <label>Format (ratio)</label>
           <select id="ratio">
-            <option value="9:16">Vertical 9:16 (TikTok/Reels)</option>
-            <option value="16:9">Horizontal 16:9 (YouTube)</option>
+            <option value="9:16">Vertical 9:16</option>
+            <option value="16:9">Horizontal 16:9</option>
             <option value="1:1">Carré 1:1</option>
           </select>
         </div>
         <div>
-          <label>Voix française</label>
-          <input type="text" id="voice" placeholder="Narration lue sur la vidéo…">
+          <label>Voix</label>
+          <select id="voiceSel">
+            <option value="homme">Homme</option>
+            <option value="femme">Femme</option>
+          </select>
+        </div>
+        <div>
+          <label>Musique de fond</label>
+          <select id="music">
+            <option value="">Sans musique</option>
+            <option value="ambiant">Ambiant</option>
+            <option value="mysterieux">Mystérieux</option>
+            <option value="doux">Doux</option>
+          </select>
         </div>
       </div>
-      <label class="toggle"><input type="checkbox" id="music" checked> 🎵 Musique de fond</label>
+      <label>Texte de la narration (lu par la voix française)</label>
+      <textarea id="voiceText" placeholder="Laisse vide pour ne pas mettre de voix…"></textarea>
       <label class="toggle"><input type="checkbox" id="subs" checked> 💬 Sous-titres incrustés</label>
     </div>
 
     <div class="card">
       <h2>4. Générer</h2>
-      <button class="btn" id="generate">🎬 Générer la vidéo (≈10-15 min)</button>
+      <button class="btn" id="generate">🎬 Générer la vidéo</button>
       <div class="progress hidden" id="progress">
         <div class="stage" id="stage">…</div>
         <div class="bar"><i id="barFill"></i></div>
@@ -109,9 +149,23 @@
       </div>
       <div class="error" id="error"></div>
       <div id="result" class="hidden">
+        <h2 id="resultTitle" style="color:var(--ink);margin-bottom:4px;"></h2>
         <video id="player" controls playsinline></video>
-        <a class="btn download" id="download" download="video-1min.mp4">⬇️ Télécharger la vidéo</a>
+        <div class="dl-row">
+          <a class="btn" id="dlMp4" download>⬇️ MP4</a>
+          <a class="btn alt" id="dlGif" download>⬇️ GIF</a>
+        </div>
+        <div class="share">
+          <input type="text" id="shareLink" readonly>
+          <button onclick="copyShare()">🔗 Copier</button>
+        </div>
+        <div class="regens" id="regens"></div>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Galerie</h2>
+      <div id="gallery"><div style="color:var(--muted);font-size:13px;">Vos vidéos générées apparaîtront ici.</div></div>
     </div>
   </div>
 
@@ -130,6 +184,7 @@
 const LS = 'agnes_storyboard_cfg';
 let images = [];
 let prompts = [];
+let currentJobId = null;
 
 function cfg() { try { return JSON.parse(localStorage.getItem(LS)||'{}'); } catch(e){ return {}; } }
 function saveCfg(c) { localStorage.setItem(LS, JSON.stringify(c)); }
@@ -172,21 +227,24 @@ async function genScenario() {
   if (!token()) { openModal(); err.textContent='Configure ta clé d\'accès (⚙️).'; return; }
   const btn = document.getElementById('scenarioBtn'); btn.disabled=true; btn.textContent='Génération du scénario…';
   try {
-    const r = await fetch(api()+'/api/scenario', {method:'POST', headers:headers(), body:JSON.stringify({theme})});
+    const r = await fetch(api()+'/api/scenario', {method:'POST', headers:headers(), body:JSON.stringify({
+      theme, duration: document.getElementById('duration').value
+    })});
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
     prompts = d.prompts || [];
+    document.getElementById('title').value = d.title || '';
     renderPrompts();
   } catch(e) { err.textContent='Erreur : '+e.message; }
-  finally { btn.disabled=false; btn.textContent='✨ Générer le scénario (5 plans)'; }
+  finally { btn.disabled=false; btn.textContent='✨ Générer le scénario'; }
 }
 
 function renderPrompts() {
   const box = document.getElementById('prompts');
-  box.innerHTML = '<label style="margin-top:14px;">Scénario (modifiable) :</label>';
+  box.innerHTML = '<label>Scénario (modifiable — un plan par ligne) :</label>';
   prompts.forEach((p,i)=>{
     const l = document.createElement('label'); l.textContent='Plan '+(i+1);
-    const t = document.createElement('textarea'); t.value=p;
+    const t = document.createElement('textarea'); t.value=p; t.rows=2;
     t.addEventListener('input', ()=> prompts[i]=t.value);
     box.appendChild(l); box.appendChild(t);
   });
@@ -203,13 +261,17 @@ async function generate() {
   const btn = document.getElementById('generate'); btn.disabled=true;
   try {
     const r = await fetch(api()+'/api/generate', {method:'POST', headers:headers(), body:JSON.stringify({
-      images, prompts, aspect_ratio: document.getElementById('ratio').value,
-      voice_text: document.getElementById('voice').value.trim(),
-      music: document.getElementById('music').checked,
+      images, prompts, title: document.getElementById('title').value.trim(),
+      aspect_ratio: document.getElementById('ratio').value,
+      duration: document.getElementById('duration').value,
+      voice: document.getElementById('voiceSel').value,
+      music: document.getElementById('music').value,
+      voice_text: document.getElementById('voiceText').value.trim(),
       subtitles: document.getElementById('subs').checked,
     })});
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
+    currentJobId = d.job_id;
     await poll(d.job_id);
   } catch(e) { err.textContent='Erreur : '+e.message; }
   finally { btn.disabled=false; }
@@ -217,9 +279,9 @@ async function generate() {
 
 async function poll(jobId) {
   const stage = document.getElementById('stage'); const fill = document.getElementById('barFill');
-  const labels = { queued:'En attente…', generating:'Génération des 5 plans…', montage:'Montage…', voice:'Voix + musique…', subtitles:'Sous-titres…', done:'Terminé ✅', error:'Erreur' };
+  const labels = { queued:'En file d\'attente…', generating:'Génération des plans…', montage:'Montage…', export:'Export (GIF)…', done:'Terminé ✅', error:'Erreur' };
   while (true) {
-    await new Promise(r=>setTimeout(r,5000));
+    await new Promise(r=>setTimeout(r,4000));
     const r = await fetch(api()+'/api/status?job_id='+jobId);
     const j = await r.json();
     stage.textContent = (labels[j.status]||j.status)+' — '+(j.progress||0)+'%';
@@ -229,19 +291,82 @@ async function poll(jobId) {
       c.textContent = j.log.map(l => l.m).join('\n');
       c.scrollTop = c.scrollHeight;
     }
-    if (j.status==='done') { await loadVideo(jobId); return; }
+    if (j.status==='done') { await loadResult(jobId, j); return; }
     if (j.status==='error') { document.getElementById('error').textContent='Erreur : '+(j.error||'inconnue'); return; }
   }
 }
 
-async function loadVideo(jobId) {
-  const r = await fetch(api()+'/api/video?job_id='+jobId, {headers:{'X-Auth-Token':token()}});
-  if (!r.ok) { document.getElementById('error').textContent='Impossible de charger la vidéo.'; return; }
-  const url = URL.createObjectURL(await r.blob());
-  document.getElementById('player').src = url;
-  document.getElementById('download').href = url;
+async function loadResult(jobId, j) {
+  const meta = j.meta || {};
+  document.getElementById('resultTitle').textContent = j.title || 'Vidéo';
+  const player = document.getElementById('player');
+  player.src = api() + (meta.mp4 || '/api/video?job_id='+jobId);
+  document.getElementById('dlMp4').href = api() + (meta.mp4 || '/api/video?job_id='+jobId);
+  document.getElementById('dlMp4').setAttribute('download', (j.title||'video').replace(/\s+/g,'_')+'.mp4');
+  if (meta.gif) {
+    document.getElementById('dlGif').href = api() + meta.gif;
+    document.getElementById('dlGif').setAttribute('download', (j.title||'video').replace(/\s+/g,'_')+'.gif');
+    document.getElementById('dlGif').classList.remove('hidden');
+  } else {
+    document.getElementById('dlGif').classList.add('hidden');
+  }
+  document.getElementById('shareLink').value = location.origin + (meta.mp4 || '/api/video?job_id='+jobId);
+  // regenerate buttons
+  const rg = document.getElementById('regens'); rg.innerHTML = '<label style="width:100%;">Régénérer un plan seul :</label>';
+  const n = (j.prompts || prompts || []).length;
+  for (let i=0;i<n;i++) {
+    const b = document.createElement('button'); b.textContent='↻ Plan '+(i+1);
+    b.onclick = () => regenerate(i);
+    rg.appendChild(b);
+  }
   document.getElementById('result').classList.remove('hidden');
   document.getElementById('progress').classList.add('hidden');
+  loadGallery();
+}
+
+async function regenerate(idx) {
+  const err = document.getElementById('error'); err.textContent='';
+  if (!currentJobId) return;
+  document.getElementById('progress').classList.remove('hidden');
+  document.getElementById('result').classList.add('hidden');
+  try {
+    const r = await fetch(api()+'/api/regenerate', {method:'POST', headers:headers(), body:JSON.stringify({
+      job_id: currentJobId, plan_index: idx
+    })});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    await poll(currentJobId);
+  } catch(e) { err.textContent='Erreur : '+e.message; }
+}
+
+function copyShare() {
+  const el = document.getElementById('shareLink');
+  el.select(); el.setSelectionRange(0, 99999);
+  try { document.execCommand('copy'); el.style.background='#123a2e'; } catch(e) {}
+}
+
+async function loadGallery() {
+  try {
+    const r = await fetch(api()+'/api/gallery');
+    const d = await r.json();
+    const box = document.getElementById('gallery');
+    if (!(d.videos||[]).length) { box.innerHTML='<div style="color:var(--muted);font-size:13px;">Vos vidéos générées apparaîtront ici.</div>'; return; }
+    box.innerHTML='';
+    d.videos.forEach(v=>{
+      const it = document.createElement('div'); it.className='gitem';
+      const vid = document.createElement('video'); vid.src = api()+v.mp4; vid.muted=true; vid.preload='metadata';
+      const info = document.createElement('div'); info.className='info';
+      const t = document.createElement('div'); t.className='t'; t.textContent = v.title || 'Vidéo';
+      const dd = document.createElement('div'); dd.className='d'; dd.textContent = new Date(v.date*1000).toLocaleString('fr-CH');
+      info.appendChild(t); info.appendChild(dd);
+      const acts = document.createElement('div'); acts.className='acts';
+      const a1 = document.createElement('a'); a1.href = api()+v.mp4; a1.download=''; a1.textContent='⬇ MP4';
+      const a2 = document.createElement('a'); a2.href = api()+v.gif; a2.download=''; a2.textContent='⬇ GIF';
+      acts.appendChild(a1); acts.appendChild(a2);
+      it.appendChild(vid); it.appendChild(info); it.appendChild(acts);
+      box.appendChild(it);
+    });
+  } catch(e) {}
 }
 
 document.getElementById('scenarioBtn').onclick = genScenario;
@@ -259,6 +384,8 @@ function openModal() {
   document.getElementById('token').value = c.token || '';
   modal.classList.add('open');
 }
+
+loadGallery();
 </script>
 </body>
 </html>
