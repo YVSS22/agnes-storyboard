@@ -36,7 +36,9 @@ HOST = os.environ.get("APP_HOST", "0.0.0.0")
 FFMPEG = "/root/.hermes/tools/ffmpeg-9.0.1-linux-x64/bin/ffmpeg"
 
 AGNES_API = "https://apihub.agnes-ai.com"
-AGNES_MODEL = "agnes-video-2.5-flash"
+# Modèles vidéo essayés dans l'ordre : le full (payant, jusqu'à 2K) d'abord,
+# puis le flash (720P) en fallback.
+VIDEO_MODELS = ["agnes-video-2.5", "agnes-video-2.5-flash"]
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek-v4-pro"
 MUSIC_VOLUME = 0.15
@@ -61,8 +63,49 @@ def _env_key(name):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     return ""
 
-AGNES_KEY = _env_key("AGNES_API_KEY")
 DEEPSEEK_KEY = _env_key("DEEPSEEK_API_KEY")
+
+# ---- pool de clés Agnes (multi-clés + rotation + préférence payante) --------
+def _all_agnes_keys():
+    keys = []
+    k = _env_key("AGNES_API_KEY")
+    if k:
+        keys.append(k)
+    kl = _env_key("AGNES_API_KEYS")
+    if kl:
+        keys += [x.strip() for x in kl.split(",") if x.strip()]
+    i = 2
+    while True:
+        k = _env_key(f"AGNES_API_KEY_{i}")
+        if not k:
+            break
+        keys.append(k)
+        i += 1
+    seen, out = set(), []
+    paid = [x for x in keys if x.startswith("cpk-")]
+    free = [x for x in keys if not x.startswith("cpk-")]
+    for x in paid + free:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+KEY_POOL = [{"key": k, "cooldown_until": 0.0, "paid": k.startswith("cpk-")} for k in _all_agnes_keys()]
+KEY_LOCK = threading.Lock()
+
+def get_key():
+    now = time.time()
+    with KEY_LOCK:
+        for k in KEY_POOL:
+            if now >= k["cooldown_until"]:
+                return k
+        if KEY_POOL:
+            return min(KEY_POOL, key=lambda k: k["cooldown_until"])
+    return None
+
+def cooldown_key(k, seconds):
+    with KEY_LOCK:
+        k["cooldown_until"] = time.time() + seconds
 
 TOKEN_PATH = BASE_DIR / "token.txt"
 if TOKEN_PATH.exists():
@@ -137,65 +180,75 @@ def decode_composite_id(v):
 def agnes_create(prompt, image_uri, aspect_ratio, seconds, job_id=None):
     # ⚠️ Format 2.5 (nouveau) : mode 'text' ou 'keyframe', champ `first_frame`
     # (PAS 'reference' + 'images', ni num_frames/frame_rate)
-    payload = {
-        "model": AGNES_MODEL, "prompt": prompt, "seconds": seconds,
-        "size": "720P", "aspect_ratio": aspect_ratio, "mode": "text",
-    }
-    if image_uri:
-        payload["mode"] = "keyframe"
-        payload["first_frame"] = image_uri
-    d = None
+    # Essaie les modèles (full → flash) et fait tourner les clés en cas de
+    # saturation (503 queue_full / 429). Retourne (ids, model, key).
     last_err = None
-    for attempt in range(6):
-        try:
-            d = http_json(AGNES_API + "/v1/videos", payload,
-                          headers={"Authorization": f"Bearer {AGNES_KEY}"})
-            break
-        except urllib.error.HTTPError as e:
-            body = e.read().decode()[:300]
-            # 503 video_queue_full / 429 rate limit / 5xx → retry avec backoff
-            if e.code in (429, 500, 502, 503, 504, 520, 522, 524):
-                last_err = f"HTTP {e.code}: {body}"
-                wait = 20 + attempt * 20
-                if job_id:
-                    log(job_id, f"Agnes saturé ({e.code}) — nouvelle tentative dans {wait}s…")
-                time.sleep(wait)
-                continue
-            raise RuntimeError(f"Agnes HTTP {e.code}: {body}")
-    if d is None:
-        raise RuntimeError(f"Agnes indisponible ({last_err})")
-    raw = d.get("video_id") or d.get("id") or d.get("task_id")
-    if not raw:
-        raise RuntimeError(f"Agnes no video_id: {json.dumps(d)[:300]}")
-    ids = [raw]
-    inner = decode_composite_id(raw)
-    if inner and inner != raw:
-        ids.append(inner)
-    return ids
+    for model in VIDEO_MODELS:
+        size = "720P"
+        for _ in range(max(2, len(KEY_POOL) * 2)):
+            key = get_key()
+            if key is None:
+                raise RuntimeError("Aucune clé Agnes configurée (vérifie .env)")
+            payload = {
+                "model": model, "prompt": prompt, "seconds": seconds,
+                "size": size, "aspect_ratio": aspect_ratio, "mode": "text",
+            }
+            if image_uri:
+                payload["mode"] = "keyframe"
+                payload["first_frame"] = image_uri
+            try:
+                d = http_json(AGNES_API + "/v1/videos", payload,
+                              headers={"Authorization": f"Bearer {key['key']}"})
+            except urllib.error.HTTPError as e:
+                body = e.read().decode()[:300]
+                if e.code in (429, 500, 502, 503, 504, 520, 522, 524):
+                    last_err = f"HTTP {e.code}: {body}"
+                    cooldown_key(key, 60)
+                    if job_id:
+                        log(job_id, f"Agnes saturé ({e.code}) — rotation clé (…{key['key'][-4:]})…")
+                    time.sleep(20)
+                    continue
+                if e.code in (400, 404) and ("model_not_found" in body or "No available channel" in body):
+                    last_err = f"modèle {model} indisponible"
+                    if job_id:
+                        log(job_id, f"Modèle {model} indisponible → suivant…")
+                    break
+                raise RuntimeError(f"Agnes HTTP {e.code}: {body}")
+            raw = d.get("video_id") or d.get("id") or d.get("task_id")
+            if not raw:
+                raise RuntimeError(f"Agnes no video_id: {json.dumps(d)[:300]}")
+            ids = [raw]
+            inner = decode_composite_id(raw)
+            if inner and inner != raw:
+                ids.append(inner)
+            return ids, model, key["key"]
+    raise RuntimeError(f"Agnes indisponible ({last_err})")
 
 # Endpoints de polling — on essaie plusieurs en fallback (le model_name est
 # obligatoire pour les modes keyframe/reference sur l'endpoint agnesapi)
-POLL_BUILDERS = [
-    lambda vid: f"{AGNES_API}/agnesapi?video_id={vid}&model_name={AGNES_MODEL}",
-    lambda vid: f"{AGNES_API}/v1/videos/{vid}",
-    lambda vid: f"{AGNES_API}/v1/videos/{vid}/status",
-    lambda vid: f"{AGNES_API}/v1/videos/{vid}?model_name={AGNES_MODEL}",
-]
+def poll_builders(model):
+    return [
+        lambda vid: f"{AGNES_API}/agnesapi?video_id={vid}&model_name={model}",
+        lambda vid: f"{AGNES_API}/v1/videos/{vid}",
+        lambda vid: f"{AGNES_API}/v1/videos/{vid}/status",
+        lambda vid: f"{AGNES_API}/v1/videos/{vid}?model_name={model}",
+    ]
 
-def agnes_download(ids, dest, job_id=None, label=""):
+def agnes_download(ids, model, key, dest, job_id=None, label=""):
     last_st = "?"
     last_progress = -1
     last_log = time.time()
+    builders = poll_builders(model)
     # 1er poll après ~60s : Agnes démarre la tâche
     for _ in range(6):
         time.sleep(10)
     for _ in range(100):  # ~25 min max
         got = False
         for vid in ids:
-            for build in POLL_BUILDERS:
+            for build in builders:
                 url = build(vid)
                 try:
-                    d = http_json(url, headers={"Authorization": f"Bearer {AGNES_KEY}"}, method="GET")
+                    d = http_json(url, headers={"Authorization": f"Bearer {key}"}, method="GET")
                 except urllib.error.HTTPError as e:
                     if e.code != 404 and time.time() - last_log > 60 and job_id:
                         log(job_id, f"{label} HTTP {e.code} sur le polling…")
@@ -285,8 +338,8 @@ def make_gif(video, out):
 
 # ---- pipeline --------------------------------------------------------------
 def render_take(prompt, image_uri, aspect_ratio, seconds, dest, job_id=None, label=""):
-    ids = agnes_create(prompt, image_uri, aspect_ratio, seconds, job_id)
-    agnes_download(ids, dest, job_id, label)
+    ids, model, key = agnes_create(prompt, image_uri, aspect_ratio, seconds, job_id)
+    agnes_download(ids, model, key, dest, job_id, label)
 
 def post_process(job_id, takes, settings):
     """Montage + voice + music + subtitles + GIF. Returns final mp4 path."""
@@ -569,7 +622,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Agnes Storyboard v4 on http://{HOST}:{PORT}  "
-          f"(agnes={'set' if AGNES_KEY else 'MISSING'}, deepseek={'set' if DEEPSEEK_KEY else 'MISSING'}, "
+          f"(clés Agnes={len(KEY_POOL)} dont payantes={sum(1 for k in KEY_POOL if k['paid'])}, "
+          f"deepseek={'set' if DEEPSEEK_KEY else 'MISSING'}, "
           f"music={sum(1 for m in MUSIC_TRACKS.values() if m.exists())}/3)")
     srv.serve_forever()
 
